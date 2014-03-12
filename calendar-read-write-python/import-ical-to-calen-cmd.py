@@ -8,17 +8,24 @@
 # GNU GPL Free Software (GPL Version 2)
 #
 # Version 0.1 (2014/03/03)
+# Version 0.2 (2014/03/12)
 #
 
 import sys
 import os
+import pwd
 
 # ユーザディレクトリにモジュールをインストールした場合、環境変数 PYTHONPATH を
 # 設定するか、次のようにスクリプト中でインストールディレクトリを指定する。
 # 【インストール時のコマンドライン ： python ./setup.py install --home=~ 】
 sys.path.append(os.path.expanduser("~") + '/lib/python')
 sys.path.append(os.path.expanduser("~") + '/lib/python/icalendar-3.6.1-py2.7.egg')
+sys.path.append(os.path.expanduser("~") + '/lib/python/dateutils-0.6.6-py2.7.egg')
+sys.path.append(os.path.expanduser("~") + '/lib/python/pytz-2013.9-py2.7.egg')
+sys.path.append(os.path.expanduser("~") + '/lib/python/python_dateutil-2.2-py2.7.egg')
+sys.path.append(os.path.expanduser("~") + '/lib/python/six-1.5.2-py2.7.egg')
 
+import argparse
 import time
 import datetime
 import ConfigParser
@@ -26,6 +33,14 @@ import base64
 import atom
 import icalendar
 import gdata.calendar.client
+
+#####
+# グローバル変数
+flag_silent_stdout = False
+flag_new_event_only = False
+config_file_root = pwd.getpwuid(os.getuid())[5]
+if config_file_root[-1:] != '/':
+    config_file_root = config_file_root + '/'
 
 #####
 # iCalファイルよりEventを読み取り、リストに格納する
@@ -36,13 +51,15 @@ def read_ical_file(filename):
     list_schedules = []
 
     # icalファイルをテキスト str_icsdata に格納する
-    try:
+    if 1:
+#    try:
         fh = open(filename, "r")
         str_icsdata = fh.read()
         fh.close()
-    except:
-        print "iCal file open error"
-        return
+    #except:
+        #if flag_silent_stdout == False:
+            #print "iCal file open error"
+        #return
 
     # icalファイル「テキスト」を解析し cal に取り込む
     cal = icalendar.Calendar.from_ical(str_icsdata)
@@ -66,10 +83,14 @@ def read_ical_file(filename):
 # Googleサーバに接続し、カレンダー イベントを追加する
 def insert_event_list_google_calendar(list_schedules, login_user, login_password):
 
+    global flag_silent_stdout
+    global flag_new_event_only
+
     # Eventリストが空の場合は何もしない
     if list_schedules is None or len(list_schedules) <= 0:
-        print "No Event in iCal file"
-        return
+        if flag_silent_stdout == False:
+            print "No Event in iCal file"
+        return 1
 
     # Google カレンダーサービスに接続する
     try:
@@ -77,24 +98,44 @@ def insert_event_list_google_calendar(list_schedules, login_user, login_password
         calendar_service.ssl = True
         calendar_service.ClientLogin(login_user, login_password, "test python script");
     except:
-        print "Google logon authenticate error"
-        return
+        if flag_silent_stdout == False:
+            print "Google logon authenticate error"
+        return 1
 
     # Eventリストを1つずつ登録済みかチェックし、未登録の場合はEventの新規登録を行う
     try:
         for list_schedule_item in list_schedules:
+            # Googleカレンダーに同一日時でEventが登録済みかチェック
             if check_event_google_calendar(calendar_service, list_schedule_item) == True:
-                print "same(skip) : " + list_schedule_item["title"] + "(" + \
-                        list_schedule_item["start"].strftime("%Y/%m/%d") + ")"
+                if flag_silent_stdout == False:
+                    print "same(skip) : " + list_schedule_item["title"].encode('utf8') + "(" + \
+                            list_schedule_item["start"].strftime("%Y/%m/%d") + ")"
+            # iCalのEventが、現在日時より過去のものでないかチェック
+            elif flag_new_event_only == True and ((type(list_schedule_item["start"]) is datetime.date \
+                and list_schedule_item["start"] < datetime.date.today()) or \
+                (type(list_schedule_item["start"]) is datetime.datetime and \
+                list_schedule_item["start"].replace(tzinfo=None) < datetime.datetime.today())):
+                if flag_silent_stdout == False:
+                    print "old(skip) : " + list_schedule_item["title"].encode('utf8') + "(" + \
+                            list_schedule_item["start"].strftime("%Y/%m/%d") + ")"
+            # Googleカレンダーに未登録で、現在より未来のEventであれば…
             else:
-                print "new add    : " + list_schedule_item["title"] + "(" + \
-                        list_schedule_item["start"].strftime("%Y/%m/%d") + ")"
-
+                if flag_silent_stdout == False:
+                    print "new add    : " + list_schedule_item["title"].encode('utf8') + "(" + \
+                            list_schedule_item["start"].strftime("%Y/%m/%d") + ")"
+                    print "  place : " + list_schedule_item["place"].encode('utf8')
+                    print "  time : ",
+                    print list_schedule_item["start"],
+                    print " 〜 ",
+                    print list_schedule_item["end"]
                 # EventをGoogleカレンダーに新規登録
                 insert_event_google_calendar(calendar_service, list_schedule_item)
     except:
-        print "Google calendar access error"
-        return
+        if flag_silent_stdout == False:
+            print "Google calendar access error"
+        return 1
+
+    return 0
 
 #####
 # GoogleカレンダーにEventを1件新規登録する
@@ -153,7 +194,10 @@ def check_event_google_calendar(calendar_service, list_schedule_item):
 # 設定ファイルから読み込む
 def config_file_read(user, password):
     parser = ConfigParser.SafeConfigParser()
-    configfile = os.path.join(os.environ['HOME'], '.google-mail-python-progs')
+    if 'HOME' in os.environ:
+        configfile = os.path.join(os.environ['HOME'], '.google-mail-python-progs')
+    else:
+        configfile = config_file_root + '.google-mail-python-progs'
 
     try:
         fp = open(configfile, 'r')
@@ -173,7 +217,10 @@ def config_file_read(user, password):
 # 設定ファイルに書き込む
 def config_file_write(user, password):
     parser = ConfigParser.SafeConfigParser()
-    configfile = os.path.join(os.environ['HOME'], '.google-mail-python-progs')
+    if 'HOME' in os.environ:
+        configfile = os.path.join(os.environ['HOME'], '.google-mail-python-progs')
+    else:
+        configfile = config_file_root + '.google-mail-python-progs'
 
     try:
         fp = open(configfile, 'w')
@@ -185,15 +232,49 @@ def config_file_write(user, password):
         print >> sys.stderr, "config write error"
 
 
-print "Import ical file to Google Calendar"
-user, password = config_file_read("example@gmail.com", "password")
+#####
+# Main : プログラム エントリーポイント
 
-# スクリプトの引数
-argv = sys.argv
-if len(argv) != 2:
-    print "usage : " + argv[0] + " filename.ics"
-    exit()
+parser = argparse.ArgumentParser(description='Import iCal file to Google Calendar')
+parser.add_argument('ical_filename', nargs='?', help='iCal file to import')
+parser.add_argument('-u', help='user name of google calendar (example@gmail.com)', metavar='User')
+parser.add_argument('-p', help='password', metavar='Password')
+parser.add_argument('-n', help='add future schedule only', action="store_true")
+parser.add_argument('-s', help='silent mode (without stdout message)', action="store_true")
 
-list_schedules = read_ical_file(argv[1])
-insert_event_list_google_calendar(list_schedules, user, password)
+args = parser.parse_args()
 
+if args.ical_filename is None:
+    print "iCal file name is missing\n-h option for help"
+    exit(1)
+elif not os.path.isfile(args.ical_filename):
+    print "iCal file ["+args.ical_filename+"] is not exist"
+    exit(1)
+ics_file = args.ical_filename
+
+if (args.u is not None and args.p is None) or (args.u is None and args.p is not None):
+    print "user or password is missing"
+    exit(1)
+if args.u is not None:
+    user = args.u
+    password = args.p
+else:
+    user, password = config_file_read("example@gmail.com", "password")
+
+if args.n is True:
+    flag_new_event_only = True
+
+if args.s is True:
+    flag_silent_stdout = True
+
+# 処理ファイル名の画面表示
+if flag_silent_stdout == False:
+    print "ics file : [" + ics_file +"]"
+    if flag_new_event_only == True:
+        print "add future schedule only mode : enable"
+
+list_schedules = read_ical_file(ics_file)
+result_value = insert_event_list_google_calendar(list_schedules, user, password)
+
+# スクリプトの戻り値 0:正常, 1:エラー
+sys.exit(result_value)
