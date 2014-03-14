@@ -9,6 +9,7 @@
 #
 # Version 0.1 (2014/03/03)
 # Version 0.2 (2014/03/12)
+# Version 0.3 (2014/03/14)
 #
 
 import sys
@@ -36,8 +37,12 @@ import gdata.calendar.client
 
 #####
 # グローバル変数
+flag_verbose_stdout = False
 flag_silent_stdout = False
 flag_new_event_only = False
+
+#####
+# シェル内実行ではない場合、ユーザルートディレクトリの指定（Webプログラムから実行の場合等）
 config_file_root = pwd.getpwuid(os.getuid())[5]
 if config_file_root[-1:] != '/':
     config_file_root = config_file_root + '/'
@@ -92,6 +97,9 @@ def insert_event_list_google_calendar(list_schedules, login_user, login_password
             print "No Event in iCal file"
         return 1
 
+    print "iCal file read success, contain data number = ",
+    print len(list_schedules)
+
     # Google カレンダーサービスに接続する
     try:
         calendar_service = gdata.calendar.client.CalendarClient()
@@ -101,6 +109,14 @@ def insert_event_list_google_calendar(list_schedules, login_user, login_password
         if flag_silent_stdout == False:
             print "Google logon authenticate error"
         return 1
+    if flag_verbose_stdout is True:
+        print "Google Calendar API, connection succeed"
+        print "  gdata.calendar.client.api_version = " + calendar_service.api_version
+        print "  gdata.calendar.client.contact_list = " + calendar_service.contact_list
+        print "  gdata.calendar.client.server  = " + calendar_service.server
+        print "  gdata.calendar.client.ssl  = ",
+        print calendar_service.ssl
+        print "  Login User = " + login_user
 
     # Eventリストを1つずつ登録済みかチェックし、未登録の場合はEventの新規登録を行う
     try:
@@ -161,9 +177,18 @@ def insert_event_google_calendar(calendar_service, list_schedule_item):
 # GoogleカレンダーのEventに同一のものがあるかチェックする
 def check_event_google_calendar(calendar_service, list_schedule_item):
 
-# Debug : 指定したイベントの開始・終了日時を画面表示
-    #print list_schedule_item["start"]
-    #print list_schedule_item["end"]
+    # Debug : 指定したイベントの開始・終了日時を画面表示
+    if flag_verbose_stdout is True:
+        print "checking event data ..."
+        print "  title : " + list_schedule_item["title"].encode('utf8')
+        print "  start : ",
+        print list_schedule_item["start"]
+        print "  end   : ",
+        print list_schedule_item["end"]
+        print "  place : " + list_schedule_item["place"].encode('utf8')
+        print "  desc  : " + list_schedule_item["desc"].encode('utf8')
+        print "  update: ",
+        print list_schedule_item["updated"]
 
     # 検索開始・終了日時の設定
     if type(list_schedule_item["start"]) is  datetime.date:
@@ -240,7 +265,9 @@ parser.add_argument('ical_filename', nargs='?', help='iCal file to import')
 parser.add_argument('-u', help='user name of google calendar (example@gmail.com)', metavar='User')
 parser.add_argument('-p', help='password', metavar='Password')
 parser.add_argument('-n', help='add future schedule only', action="store_true")
+parser.add_argument('-v', help='verbose output message', action="store_true")
 parser.add_argument('-s', help='silent mode (without stdout message)', action="store_true")
+parser.add_argument('-auth_nosave', help='do not save user/password data', action="store_true")
 
 args = parser.parse_args()
 
@@ -266,15 +293,25 @@ if args.n is True:
 
 if args.s is True:
     flag_silent_stdout = True
+if args.v is True:
+    flag_verbose_stdout = True
+if args.s is True and args.v is True:
+    print "-v and -s option is incompatible"
+    exit(1)
 
 # 処理ファイル名の画面表示
 if flag_silent_stdout == False:
-    print "ics file : [" + ics_file +"]"
+    print "iCal file : [" + ics_file +"]"
     if flag_new_event_only == True:
         print "add future schedule only mode : enable"
 
 list_schedules = read_ical_file(ics_file)
 result_value = insert_event_list_google_calendar(list_schedules, user, password)
+
+# 正常終了で、ユーザ名/パスワードが入力されていた場合は、設定ファイルを書き換える
+if args.auth_nosave is False:
+    if args.u is not None and result_value == 0:
+        config_file_write(user, password)
 
 # スクリプトの戻り値 0:正常, 1:エラー
 sys.exit(result_value)
